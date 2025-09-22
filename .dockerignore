@@ -3,6 +3,10 @@ config/db/
 config/logs/
 *.log
 
+# Ignore local UI build artifacts
+data/react-ui/node_modules/
+data/react-ui/dist/
+
 # Ignore Python cache
 config/scripts/__pycache__/
 

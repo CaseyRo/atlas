@@ -5,14 +5,10 @@ echo "🔧 Atlas CI/CD Deployment Script"
 
 # Resolve repo root from this script's location
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UI_DIR="${REPO_ROOT}/data/react-ui"
-HTML_DIR="${REPO_ROOT}/data/html"
 IMAGE="keinstien/atlas"
 CONTAINER_NAME="atlas"
 
 echo "📁 Repo root: $REPO_ROOT"
-echo "🧩 UI dir:    $UI_DIR"
-echo "🗂️  HTML dir:   $HTML_DIR"
 
 # Prompt for version
 read -p "👉 Enter the version tag (e.g. v3.3): " VERSION
@@ -31,35 +27,10 @@ fi
 
 # Sanity checks
 command -v docker >/dev/null 2>&1 || { echo "❌ docker is not installed or not in PATH"; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "❌ npm is not installed or not in PATH"; exit 1; }
-[[ -d "$UI_DIR" ]] || { echo "❌ React UI directory not found at: $UI_DIR"; exit 1; }
 
 echo "📦 Starting deployment for version: $VERSION"
-
-# Step 1: Build React UI from repo's data/react-ui
-echo "🛠️ Building React UI..."
-pushd "$UI_DIR" >/dev/null
-if [[ -f package-lock.json ]]; then
-  npm ci
-else
-  npm install
-fi
-npm run build
-popd >/dev/null
-
-# Step 2: Copy UI build output to data/html (used by Dockerfile)
-echo "📂 Copying UI build to data/html..."
-mkdir -p "$HTML_DIR"
-rm -rf "${HTML_DIR:?}/"* 2>/dev/null || true
-cp -r "$UI_DIR/dist/"* "$HTML_DIR/"
-
-# Step 2b: Write build-info.json for the UI to display
-echo "📝 Writing build-info.json..."
 COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'dirty')"
 BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-cat > "${HTML_DIR}/build-info.json" <<EOF
-{ "version": "${VERSION}", "commit": "${COMMIT_SHA}", "builtAt": "${BUILD_TIME}" }
-EOF
 
 # Step 3: Stop and remove existing container if present
 echo "🧹 Removing existing '$CONTAINER_NAME' container if running..."
@@ -75,7 +46,11 @@ fi
 
 # Step 5: Build Docker image from repo root
 echo "🐳 Building Docker image: $IMAGE:$VERSION"
-DOCKER_BUILDKIT=1 docker build -t "$IMAGE:$VERSION" "$REPO_ROOT"
+DOCKER_BUILDKIT=1 docker build \
+  --build-arg BUILD_VERSION="$VERSION" \
+  --build-arg BUILD_COMMIT="$COMMIT_SHA" \
+  --build-arg BUILD_TIME="$BUILD_TIME" \
+  -t "$IMAGE:$VERSION" "$REPO_ROOT"
 
 # Step 5b: Optionally tag as latest
 if $DO_LATEST; then

@@ -66,7 +66,14 @@ Atlas performs three key functions:
 
 ## 🚀 Deployment (Docker)
 
-Run the Atlas stack with:
+Atlas now exposes both the UI and API ports via environment variables so you can align them with your host policies:
+
+- `ATLAS_UI_PORT` – default `8888`
+- `ATLAS_API_PORT` – default `8889`
+
+Static HTML assets are compiled during the Docker build, so no manual `npm run build` step is required before running a container.
+
+### Quick start (host networking)
 
 ```bash
 docker run -d \
@@ -75,16 +82,27 @@ docker run -d \
   --cap-add=NET_RAW \
   --cap-add=NET_ADMIN \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -e ATLAS_UI_PORT=8888 \
+  -e ATLAS_API_PORT=8889 \
   keinstien/atlas:latest
 ```
 
-📌 This will:
+### Custom ports with bridge networking
 
-Expose the UI on http://localhost:8888
+```bash
+docker run -d \
+  --name atlas \
+  --cap-add=NET_RAW \
+  --cap-add=NET_ADMIN \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e ATLAS_UI_PORT=3000 \
+  -e ATLAS_API_PORT=3001 \
+  -p 3000:3000 \
+  -p 3001:3001 \
+  keinstien/atlas:latest
+```
 
-Launch backend API at http://localhost:8889
-
-Auto-scan Docker + local subnet on container start
+📌 At container start the Go scanners run automatically and Atlas begins discovering your environment right away.
 
 ---
 
@@ -101,14 +119,23 @@ Auto-scan Docker + local subnet on container start
     - `deepscan`: Enriches data with port scans, OS info, etc.
 
 - **FastAPI Backend**
-  - Runs on `port 8889`
+  - Runs on the port set via `ATLAS_API_PORT` (default `8889`)
   - Serves:
     - `/api/hosts` – all discovered hosts (regular + Docker)
     - `/api/external` – external IP and metadata
 
 - **NGINX**
-  - Serves frontend (React static build) on `port 8888`
-  - Proxies API requests (`/api/`) to FastAPI (`localhost:8889`)
+  - Serves the React build on the port set via `ATLAS_UI_PORT` (default `8888`)
+  - Proxies API requests (`/api/`) to FastAPI using the configured `ATLAS_API_PORT`
+
+### 🔌 Ports & Environment Variables
+
+| Component | Default Port | Environment Variable |
+|-----------|---------------|----------------------|
+| UI (NGINX) | `8888` | `ATLAS_UI_PORT` |
+| API (FastAPI) | `8889` | `ATLAS_API_PORT` |
+
+> When using Docker bridge networking, remember to map your chosen ports via `-p HOST:CONTAINER`.
 
 ---
 
@@ -123,11 +150,11 @@ atlas/
 │   ├── bin/             # Compiled Go binary (atlas)
 │   ├── db/              # SQLite file created on runtime
 │   ├── logs/            # Uvicorn logs
-│   ├── nginx/           # default.conf for port 8888
+│   ├── nginx/           # runtime template rendered with ATLAS_* ports
 │   └── scripts/         # startup shell scripts
 ├── data/
-│   ├── html/            # Static files served by Nginx
-│   └── react-ui/        # Frontend source (React)
+│   ├── html/            # (Optional) local builds; container builds generate assets automatically
+│   └── react-ui/        # Frontend source (React + Vite)
 ├── Dockerfile
 ├── LICENSE
 └── README.md
@@ -139,7 +166,7 @@ atlas/
 ├── bin/atlas             # Go binary entrypoint
 ├── db/atlas.db           # Persistent SQLite3 DB
 ├── logs/                 # Logs for FastAPI
-├── nginx/default.conf    # Nginx config
+├── nginx/default.conf.template    # Rendered to /etc/nginx/conf.d at runtime
 └── scripts/atlas_check.sh # Entrypoint shell script
 
 ```
@@ -148,25 +175,18 @@ atlas/
 
 ## 🧪 React Frontend (Dev Instructions)
 
-This is a new React-based UI.
+Atlas uses a Vite-powered React UI that is bundled automatically during the Docker build.
 
 ### 🛠️ Setup and Build
 
 ```bash
-cd /swarm/data/atlas/react-ui
+cd data/react-ui
 npm install
-npm run build
+npm run dev      # run the local dev server
+npm run build    # optional: create a local production build
 ```
 
-The built output will be in:
-```
-/swarm/data/atlas/react-ui/dist/
-```
-
-For development CI/CD (for UI and backend anf build a new docker version):
-```bash
-/swarm/github-repos/atlas/deploy.sh
-```
+The `dist/` output is only needed when testing locally—container builds now install dependencies and run `npm run build` internally.
 
 
 ## 🚀 CI/CD: Build and Publish a New Atlas Docker Image
@@ -179,8 +199,10 @@ To deploy a new version and upload it to Docker Hub, use the provided CI/CD scri
    /swarm/github-repos/atlas/deploy.sh
    ```
 
-   - The script will prompt you for a version tag (e.g. `v3.2`).
-   - It will build the React frontend, copy to NGINX, build the Docker image, and push **both** `keinstien/atlas:$VERSION` and `keinstien/atlas:latest` to Docker Hub.
+   - The script prompts you for a version tag (e.g. `v3.2`).
+   - It passes the version, commit SHA, and build timestamp into the Docker build so the image embeds accurate UI metadata.
+   - The multi-stage Dockerfile handles compiling the React frontend during the build, so no manual copy step is required.
+   - After a successful build it can optionally tag `keinstien/atlas:latest` in addition to `keinstien/atlas:$VERSION`.
 
 2. Why push both tags?
 
@@ -188,6 +210,8 @@ To deploy a new version and upload it to Docker Hub, use the provided CI/CD scri
    - **Latest tag:** Users can always pull the most recent stable build via `docker pull keinstien/atlas:latest`.
 
 3. The script will also redeploy the running container with the new version.
+
+> `deploy.sh` remains the quickest way to cut and publish a release. For local testing you can skip it and build the Dockerfile directly.
 
 **Example output:**
 ```shell
@@ -199,19 +223,60 @@ To deploy a new version and upload it to Docker Hub, use the provided CI/CD scri
 > **Note:** Make sure you are logged in to Docker Hub (`docker login`) before running the script.
 
 
+## 🐳 Building Atlas Images
+
+### Standard (Dockerfile)
+
+Build an amd64 image locally with the default Dockerfile:
+
+```bash
+docker build -t keinstien/atlas:dev .
+```
+
+### ARM64 (`Dockerfile.arm64`)
+
+Use Docker Buildx to target Apple Silicon, Raspberry Pi, or other ARM hosts:
+
+```bash
+# create or reuse a builder that supports multi-architecture builds
+docker buildx create --use --name atlas-builder
+
+# build and load a local ARM64 image
+docker buildx build \
+  --platform linux/arm64 \
+  -f Dockerfile.arm64 \
+  -t keinstien/atlas:arm64-dev \
+  --load .
+
+# run it with custom ports, if desired
+docker run -d \
+  --name atlas-arm \
+  --cap-add=NET_RAW \
+  --cap-add=NET_ADMIN \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e ATLAS_UI_PORT=8888 \
+  -e ATLAS_API_PORT=8889 \
+  -p 8888:8888 \
+  -p 8889:8889 \
+  keinstien/atlas:arm64-dev
+```
+
+When publishing, prefer descriptive tags such as `keinstien/atlas:arm64-v3.3`. You can add `--push` to the `docker buildx build` invocation to upload the ARM64 image to a registry.
+
+
 ---
 
 ## 🌍 URLs
 
 - **Swagger API docs:**
-  - `🌍 http://localhost:8888/api/docs` (Host Data API endpoint)
+  - `🌍 http://localhost:${ATLAS_UI_PORT}/api/docs` (Host Data API endpoint)
 
 - **Frontend UI:**
-  - `🖥️ UI	http://localhost:8888/` (main dashboard)
-  - `📊 http://localhost:8888/hosts.html` (Hosts Table)
-  - `🧪 http://localhost:8888/visuals/vis.js_node_legends.html` (legacy test UI)
+  - `🖥️ UI       http://localhost:${ATLAS_UI_PORT}/` (main dashboard)
+  - `📊 http://localhost:${ATLAS_UI_PORT}/hosts.html` (Hosts Table)
+  - `🧪 http://localhost:${ATLAS_UI_PORT}/visuals/vis.js_node_legends.html` (legacy test UI)
 
-> Default exposed port is: `8888`
+> Replace `${ATLAS_UI_PORT}` with the port you configured (defaults to `8888`).
 
 ---
 
@@ -238,9 +303,9 @@ To edit API:
 - Python FastAPI app: `scripts/app.py`
 
 To edit UI:
-- Modify React app under `/react-ui`
-- Rebuild and copy static files to `/html`
-- _automated deplolyment and publish to dockerhub using the script deploy.sh_
+- Modify the React app under `data/react-ui`
+- Use `npm run dev` locally; Docker builds run `npm run build` for you
+- Use `deploy.sh` when you need to tag and publish a release image
 ---
 
 ## ⚙️ Automation Notes

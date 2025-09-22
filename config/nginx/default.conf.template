@@ -1,6 +1,6 @@
 server {
-    listen       8888;
-    listen       [::]:8888;
+    listen       ${ATLAS_UI_PORT};
+    listen       [::]:${ATLAS_UI_PORT};
     server_name  localhost;
 
     location / {
@@ -9,9 +9,9 @@ server {
         try_files $uri /index.html;
     }
 
-    # API proxy to the backend running on port 8889
+    # API proxy to the backend running on port ${ATLAS_API_PORT}
     location /api/ {
-        proxy_pass http://localhost:8889/;
+        proxy_pass http://localhost:${ATLAS_API_PORT}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

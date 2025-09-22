@@ -1,98 +1,64 @@
-docker run -d -p 8888:80 -p 8889:8000 --name atlas \
--v /swarm/data/atlas/html:/usr/share/nginx/html \
--v /swarm/config/atlas:/config \
--v /var/run/docker.sock:/var/run/docker.sock \
-nginx
+# Atlas runtime & deployment notes
 
+## Run the container
+
+Host networking (no port mappings needed):
+```bash
+docker run -d \
+  --name atlas \
+  --network=host \
+  --cap-add=NET_RAW \
+  --cap-add=NET_ADMIN \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e ATLAS_UI_PORT=8888 \
+  -e ATLAS_API_PORT=8889 \
+  keinstien/atlas:latest
+```
+
+Bridge networking (publish whichever ports you configure):
+```bash
+docker run -d \
+  --name atlas \
+  --cap-add=NET_RAW \
+  --cap-add=NET_ADMIN \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e ATLAS_UI_PORT=3000 \
+  -e ATLAS_API_PORT=3001 \
+  -p 3000:3000 \
+  -p 3001:3001 \
+  keinstien/atlas:latest
+```
+
+HTML assets are compiled during the Docker build, so you no longer need to copy a local `dist/` directory into the container volume.
 
 ## URLs
-API
-http://192.168.2.81:8889/hosts
-nginx
-http://192.168.2.81:8888/
-http://192.168.2.81:8888/diagram-g6-cluster.html
+- UI: `http://localhost:${ATLAS_UI_PORT}/`
+- API docs: `http://localhost:${ATLAS_UI_PORT}/api/docs`
+- API JSON: `http://localhost:${ATLAS_UI_PORT}/api/hosts`
 
+Replace `${ATLAS_UI_PORT}` with whichever UI port you configured (defaults to `8888`).
 
-cd /config/scripts
-./script.sh
-
-# start the api op port 8889
-uvicorn scripts.app:app --host 0.0.0.0 --port 8000
-cd /config/scripts
-# export the path
+## Manual backend debugging
+The entrypoint script (`config/scripts/atlas_check.sh`) now starts both FastAPI and Nginx using the configured environment variables. If you need to run the FastAPI server manually for debugging:
+```bash
 export PYTHONPATH=/config
-# start in the background and save to log file
-uvicorn scripts.app:app --host 0.0.0.0 --port 8000 > /config/logs/uvicorn.log 2>&1 &
+ATLAS_API_PORT=${ATLAS_API_PORT:-8889}
+uvicorn scripts.app:app --host 0.0.0.0 --port "$ATLAS_API_PORT" > /config/logs/uvicorn.log 2>&1 &
+```
 
-# docker file
-CMD ["uvicorn", "/config/scripts/app:app", "--host", "0.0.0.0", "--port", "8000"]
+## Publishing images
+Use `deploy.sh` when you want to build, tag, and push the standard image (React assets are bundled automatically):
+```bash
+./deploy.sh
+```
 
+For ARM64 builds, leverage Docker Buildx with the dedicated `Dockerfile.arm64`:
+```bash
+docker buildx build \
+  --platform linux/arm64 \
+  -f Dockerfile.arm64 \
+  -t keinstien/atlas:arm64-dev \
+  --load .
+```
+Add `--push` when you want to publish to Docker Hub and tag releases like `keinstien/atlas:arm64-vX.Y`.
 
-# check table
-sqlite3 /config/db/atlas.db "SELECT * FROM hosts;"
-
-
-# collect containers infos
-docker inspect $(docker ps -q ) \
---format='{{ printf "%-50s" .Name}} {{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'
-
-
-
------------------------------------------
-
-new dev react app
-
-upload files to /swarm/data/atlas/react-ui
-cd /swarm/data/atlas/react-ui
-npm install
-npm run build
-
-The output will appear in: /swarm/data/atlas/react-ui/dist/
-
-Copy this into the NGINX volume:
-cp -r dist/* /swarm/data/atlas-dev/html/
-
-mv /swarm/data/atlas/react-ui /swarm/data/atlas-dev/
-
-
-npm run build
-cp -r dist/* /swarm/data/atlas/html/
-
-
--------------------------------
-
-publish container instructions
-
-/home/karam/atlas-repo-backup.sh
-
-docker run -d \
-  --name atlas1 \
-  --network=host \
-  --cap-add=NET_RAW \
-  --cap-add=NET_ADMIN \
-  -v /swarm/config/atlas/nginx/default.conf:/etc/nginx/conf.d/default.conf \
-  -v /swarm/data/atlas/html:/usr/share/nginx/html \
-  -v /swarm/config/atlas:/config \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  keinstien/atlas:v2.0
-
-ports:
-8888 nginx
-8889 api
-
-uvicorn scripts.app:app --host 0.0.0.0 --port 8889 > /config/logs/uvicorn.log 2>&1 &
-
-
-up to date scripts:
-
-docker commit atlas1 keinstien/atlas:v1.0
-docker push keinstien/atlas:v1.0
-docker rm -f atlas1
-
-docker run -d \
-  --name atlas1 \
-  --network=host \
-  --cap-add=NET_RAW \
-  --cap-add=NET_ADMIN \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  keinstien/atlas:v2.0

@@ -1,23 +1,23 @@
 # syntax=docker/dockerfile:1.4
 
-# Stage 1: Build the React UI
-FROM node:20-bullseye-slim AS ui-builder
+# Stage 1: Build the React UI for ARM64
+FROM --platform=linux/arm64 node:20-bullseye-slim AS ui-builder
 WORKDIR /app
 COPY data/react-ui/package*.json ./
 RUN npm ci
 COPY data/react-ui/ ./
 RUN npm run build
 
-# Stage 2: Build the Go binary
-FROM golang:1.22 AS go-builder
+# Stage 2: Build the Go binary for ARM64
+FROM --platform=linux/arm64 golang:1.22 AS go-builder
 WORKDIR /src
 COPY config/atlas_go/go.mod config/atlas_go/go.sum ./
 RUN go mod download
 COPY config/atlas_go/ ./
 RUN go build -o atlas .
 
-# Stage 3: Final runtime image
-FROM python:3.11-slim
+# Stage 3: Final runtime image for ARM64
+FROM --platform=linux/arm64 python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
