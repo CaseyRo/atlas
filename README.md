@@ -200,18 +200,72 @@ To deploy a new version and upload it to Docker Hub, use the provided CI/CD scri
 
 ### 🐳 Multi-arch Docker builds (arm64 focus)
 
-The repository also includes `Dockerfile.arm64`, which reproduces the deploy script inside Docker multi-stage builds. The recommended command to build an ARM image is:
+Atlas ships with two Dockerfiles:
+
+- `Dockerfile` – default x86_64/amd64 build used for `keinstien/atlas:latest`
+- `Dockerfile.arm64` – mirrors the main recipe but pins the toolchain to ARM64
+
+The sections below show common ways to produce an ARM64 image, but you can freely swap the `--platform` flag to build other architectures (e.g. `linux/amd64`, `linux/arm/v7`).
+
+#### 1. Build directly on an ARM64 workstation (Apple Silicon, Graviton, etc.)
 
 ```bash
-docker buildx build --platform linux/arm64 \
+docker build \
   -f Dockerfile.arm64 \
-  --build-arg VERSION="$(git describe --tags --always)" \
-  --build-arg COMMIT_SHA="$(git rev-parse --short HEAD)" \
-  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t keinstien/atlas:arm64 .
+  -t keinstien/atlas:arm64-local .
 ```
 
-To verify cross-platform compatibility you can swap `--platform` (e.g. `linux/amd64`) and retag the output (such as `keinstien/atlas:amd64`). The resulting containers continue to boot via `atlas_check.sh`, just like the primary image.
+This route keeps all layers on the machine you run the command from—perfect when you only need a local test container.
+
+#### 2. Cross-build locally using Docker Buildx
+
+```bash
+docker buildx create --name atlas-builder --use
+docker buildx build --platform linux/arm64 \
+  -f Dockerfile.arm64 \
+  -t keinstien/atlas:arm64 \
+  --load .
+```
+
+Passing `--load` places the finished image into your local Docker cache so you can `docker run` it immediately. Swap `--load` for `--push` if you want to publish straight to Docker Hub as part of CI.
+
+#### 3. Cross-build on a remote builder (useful for CI runners)
+
+```bash
+# Point Buildx at an SSH-accessible ARM host or a remote Docker context
+docker buildx create --name atlas-remote --driver docker-container \
+  --platform linux/arm64 \
+  ssh://user@arm-host --use
+
+docker buildx build --platform linux/arm64 \
+  -f Dockerfile.arm64 \
+  -t registry.example.com/atlas:arm64 \
+  --push .
+```
+
+The remote builder receives the source context, performs the build natively, and pushes the result to your registry without copying large layers back to your workstation.
+
+> ℹ️ `deploy.sh` automates steps similar to the above when publishing releases—it compiles the React UI, syncs static assets, and builds/pushes both amd64 and arm64 images.
+
+To verify cross-platform compatibility you can swap `--platform` to other targets and retag the output (such as `keinstien/atlas:amd64`). The resulting containers continue to boot via `atlas_check.sh`, just like the primary image.
+
+### 🔧 Changing the NGINX/UI port
+
+Atlas serves the React UI through NGINX. Because Atlas requires host network access, you can't rely on standard Docker port mappings to change the UI port. Instead, adjust the port that NGINX listens on inside the container:
+
+**Change the NGINX listen port inside the container:**
+
+   ```bash
+   docker run -d \
+     -e ATLAS_UI_PORT=3000 \
+     -p 3000:3000 \
+     --name atlas \
+     keinstien/atlas:latest
+   ```
+
+   `atlas_check.sh` renders `/etc/nginx/conf.d/default.conf` from `config/nginx/default.conf.template`, so setting `ATLAS_UI_PORT` updates the NGINX `listen` directives at runtime. Because the container joins the host network, the UI will now be available on `http://localhost:3000` without additional port remapping.
+
+If you modify the baked-in defaults (e.g. in `Dockerfile*` or `config/nginx/default.conf.template`), update the README and any deployment scripts so the new port is documented everywhere.
 
 
 ---
